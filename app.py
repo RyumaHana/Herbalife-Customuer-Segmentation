@@ -1,10 +1,10 @@
 import io
-import base64
 import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
@@ -111,40 +111,89 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-CLUSTER_COLORS = {0: "#3b82f6", 1: "#f59e0b", 2: "#16a34a", 3: "#ef4444", 4: "#8b5cf6"}
-
-STRATEGI = {
-    0: {
-        "Kategori": "Pelanggan Reguler",
-        "Icon": "🙂",
-        "Deskripsi": "Recency, Frequency, dan Monetary berada pada tingkat sedang. Pelanggan masih cukup aktif bertransaksi.",
-        "Strategi": "Berikan promosi berkala, rekomendasi produk sesuai riwayat pembelian, dan program membership.",
-    },
-    1: {
-        "Kategori": "Pelanggan Berisiko",
-        "Icon": "⚠️",
-        "Deskripsi": "Recency relatif tinggi, Frequency dan Monetary rendah. Sudah cukup lama tidak bertransaksi.",
-        "Strategi": "Kirim voucher diskon, promo reaktivasi, serta pengingat untuk kembali melakukan pembelian.",
-    },
-    2: {
-        "Kategori": "Pelanggan Loyal",
-        "Icon": "⭐",
+# =============================================================================
+# ARCHETYPE STRATEGI (urut dari pelanggan TERBAIK -> TERBURUK berdasar skor RFM)
+# Jumlah archetype tetap 5, tapi akan dipetakan secara dinamis ke berapapun K
+# yang dipilih user (lihat build_strategi()).
+# =============================================================================
+ARCHETYPES = [
+    {
+        "Kategori": "Pelanggan Loyal", "Icon": "⭐",
         "Deskripsi": "Recency paling rendah, Frequency & Monetary paling tinggi. Pelanggan terbaik dan paling aktif.",
         "Strategi": "Berikan reward, poin loyalitas, promo eksklusif, serta penawaran produk premium.",
     },
-    3: {
-        "Kategori": "Pelanggan Tidak Aktif",
-        "Icon": "💤",
-        "Deskripsi": "Recency paling tinggi, Frequency & Monetary paling rendah. Sudah lama tidak bertransaksi.",
-        "Strategi": "Lakukan kampanye win-back, diskon besar, atau penawaran khusus untuk menarik pelanggan kembali.",
-    },
-    4: {
-        "Kategori": "Pelanggan Potensial",
-        "Icon": "🚀",
+    {
+        "Kategori": "Pelanggan Potensial", "Icon": "🚀",
         "Deskripsi": "Frequency & Monetary cukup tinggi, Recency relatif rendah. Berpotensi menjadi pelanggan loyal.",
         "Strategi": "Tawarkan paket bundling, upselling, dan promosi produk baru agar nilai transaksi meningkat.",
     },
-}
+    {
+        "Kategori": "Pelanggan Reguler", "Icon": "🙂",
+        "Deskripsi": "Recency, Frequency, dan Monetary berada pada tingkat sedang. Pelanggan masih cukup aktif bertransaksi.",
+        "Strategi": "Berikan promosi berkala, rekomendasi produk sesuai riwayat pembelian, dan program membership.",
+    },
+    {
+        "Kategori": "Pelanggan Berisiko", "Icon": "⚠️",
+        "Deskripsi": "Recency relatif tinggi, Frequency dan Monetary rendah. Sudah cukup lama tidak bertransaksi.",
+        "Strategi": "Kirim voucher diskon, promo reaktivasi, serta pengingat untuk kembali melakukan pembelian.",
+    },
+    {
+        "Kategori": "Pelanggan Tidak Aktif", "Icon": "💤",
+        "Deskripsi": "Recency paling tinggi, Frequency & Monetary paling rendah. Sudah lama tidak bertransaksi.",
+        "Strategi": "Lakukan kampanye win-back, diskon besar, atau penawaran khusus untuk menarik pelanggan kembali.",
+    },
+]
+
+COLOR_PALETTE = [
+    "#16a34a", "#3b82f6", "#f59e0b", "#8b5cf6", "#ef4444",
+    "#0ea5e9", "#ec4899", "#84cc16", "#f97316", "#6366f1",
+]
+
+
+def build_strategi(cluster_summary: pd.DataFrame):
+    """
+    Menyusun mapping {cluster_id: {Kategori, Icon, Deskripsi, Strategi}} dan
+    {cluster_id: warna} secara DINAMIS berdasarkan skor RFM tiap cluster,
+    sehingga tetap bermakna untuk berapapun nilai K yang dipilih user.
+
+    Skor = zscore(Frequency) + zscore(Monetary) - zscore(Recency)
+    Semakin tinggi skor -> semakin "baik" pelanggan (loyal),
+    semakin rendah skor -> semakin "buruk" (tidak aktif).
+    """
+    df = cluster_summary.copy()
+    std_r = df["Recency"].std(ddof=0) or 1
+    std_f = df["Frequency"].std(ddof=0) or 1
+    std_m = df["Monetary"].std(ddof=0) or 1
+
+    df["z_R"] = (df["Recency"] - df["Recency"].mean()) / std_r
+    df["z_F"] = (df["Frequency"] - df["Frequency"].mean()) / std_f
+    df["z_M"] = (df["Monetary"] - df["Monetary"].mean()) / std_m
+    df["Score"] = df["z_F"] + df["z_M"] - df["z_R"]
+    df = df.sort_values("Score", ascending=False).reset_index(drop=True)
+
+    k = len(df)
+    # pilih K archetype yang tersebar merata dari 5 archetype dasar
+    n_base = min(k, len(ARCHETYPES))
+    idx_pick = np.linspace(0, len(ARCHETYPES) - 1, n_base).round().astype(int)
+
+    strategi_map, color_map = {}, {}
+    for rank, row in df.iterrows():
+        cluster_id = int(row["Cluster"])
+        if rank < len(idx_pick):
+            arch = ARCHETYPES[idx_pick[rank]].copy()
+        else:
+            tingkat = rank - len(idx_pick) + 1
+            arch = {
+                "Kategori": f"Pelanggan Segmen Tambahan {tingkat}",
+                "Icon": "🔹",
+                "Deskripsi": "Segmen tambahan hasil clustering dengan K besar; karakteristik RFM berada di antara segmen-segmen utama.",
+                "Strategi": "Bandingkan posisi RFM segmen ini terhadap segmen lain, lalu sesuaikan pendekatan promosi secara proporsional.",
+            }
+        strategi_map[cluster_id] = arch
+        color_map[cluster_id] = COLOR_PALETTE[rank % len(COLOR_PALETTE)]
+
+    return strategi_map, color_map
+
 
 # =============================================================================
 # LOAD & PROSES DATA (mengikuti alur notebook)
@@ -169,13 +218,15 @@ def compute_rfm(df):
 
 
 @st.cache_data(show_spinner=False)
-def run_elbow(X, k_range=range(2, 11)):
-    wcss = []
+def run_elbow_silhouette(X, k_range=tuple(range(2, 11))):
+    """Hitung WCSS (elbow) DAN silhouette score untuk tiap K dalam rentang."""
+    wcss, sil_scores = [], []
     for i in k_range:
         km = KMeans(n_clusters=i, random_state=42, n_init=10)
-        km.fit(X)
+        labels = km.fit_predict(X)
         wcss.append(km.inertia_)
-    return list(k_range), wcss
+        sil_scores.append(silhouette_score(X, labels))
+    return list(k_range), wcss, sil_scores
 
 
 @st.cache_data(show_spinner=False)
@@ -252,6 +303,13 @@ with st.sidebar:
     uploaded = st.file_uploader("📁 Ganti dataset (opsional)", type=["csv"])
     data_source = uploaded if uploaded is not None else "dataset_herbalife2425_koreksi.csv"
 
+    st.markdown("### ⚙️ Pengaturan Clustering")
+    k_selected = st.slider(
+        "Jumlah Cluster (K)",
+        min_value=2, max_value=10, value=5, step=1,
+        help="Ubah nilai K untuk melihat perubahan segmentasi dan silhouette score-nya.",
+    )
+
     page = st.radio(
         "Navigasi",
         [
@@ -274,10 +332,14 @@ except Exception as e:
     st.stop()
 
 rfm_raw, snapshot_date = compute_rfm(herbal)
-rfm, sil_score, X_scaled = run_kmeans(rfm_raw, optimal_k=5)
-rfm["Kategori"] = rfm["Cluster"].map(lambda c: STRATEGI[c]["Kategori"])
 
-tree_model, akurasi, cm, X_train, X_test, y_train, y_test, y_pred = run_decision_tree(rfm)
+# hitung elbow + silhouette untuk rentang K 2-10 (dipakai di halaman Decision Tree)
+scaler_tmp = StandardScaler()
+X_elbow = scaler_tmp.fit_transform(rfm_raw[["Recency", "Frequency", "Monetary"]])
+k_range, wcss, sil_scores_range = run_elbow_silhouette(X_elbow)
+
+# clustering final memakai K yang dipilih user
+rfm, sil_score, X_scaled = run_kmeans(rfm_raw, optimal_k=k_selected)
 
 cluster_summary = rfm.groupby("Cluster").agg(
     Recency=("Recency", "mean"),
@@ -285,6 +347,12 @@ cluster_summary = rfm.groupby("Cluster").agg(
     Monetary=("Monetary", "mean"),
     Jumlah_Pelanggan=("Customer_ID", "count"),
 ).reset_index()
+
+# STRATEGI & CLUSTER_COLORS sekarang dihitung dinamis sesuai K yang dipilih
+STRATEGI, CLUSTER_COLORS = build_strategi(cluster_summary)
+rfm["Kategori"] = rfm["Cluster"].map(lambda c: STRATEGI[c]["Kategori"])
+
+tree_model, akurasi, cm, X_train, X_test, y_train, y_test, y_pred = run_decision_tree(rfm)
 
 # =============================================================================
 # HEADER
@@ -312,7 +380,7 @@ if page == "🏠 Dashboard Utama":
     with c4:
         metric_card("📊", "Rata-rata Nilai Transaksi", rupiah(herbal["Total_Transaksi"].mean()))
     with c5:
-        metric_card("🧩", "Jumlah Cluster", "5", sub=f"Silhouette: {sil_score:.3f}")
+        metric_card("🧩", "Jumlah Cluster (K)", f"{k_selected}", sub=f"Silhouette: {sil_score:.3f}")
 
     st.write("")
 
@@ -431,7 +499,8 @@ elif page == "🌳 Decision Tree":
     st.markdown('<div class="section-title">🌳 Model Decision Tree - Klasifikasi Cluster</div>', unsafe_allow_html=True)
     st.write(
         "Decision Tree dilatih untuk mempelajari aturan klasifikasi cluster pelanggan "
-        "berdasarkan nilai **Recency, Frequency, dan Monetary** hasil segmentasi K-Means."
+        "berdasarkan nilai **Recency, Frequency, dan Monetary** hasil segmentasi K-Means "
+        f"(K = {k_selected})."
     )
 
     m1, m2, m3, m4 = st.columns(4)
@@ -484,30 +553,60 @@ elif page == "🌳 Decision Tree":
                               coloraxis_showscale=False)
         st.plotly_chart(fig_cm, width='stretch')
 
-    st.markdown('<div class="section-title">📈 Perbandingan Jumlah Cluster (Elbow Method)</div>', unsafe_allow_html=True)
-    scaler_tmp = StandardScaler()
-    X_elbow = scaler_tmp.fit_transform(rfm_raw[["Recency", "Frequency", "Monetary"]])
-    k_range, wcss = run_elbow(X_elbow)
-    fig_elbow = px.line(x=list(k_range), y=wcss, markers=True,
-                         labels={"x": "Jumlah Cluster (K)", "y": "WCSS"},
-                         title="Elbow Method untuk Menentukan Jumlah Cluster Optimal")
-    fig_elbow.add_vline(x=5, line_dash="dash", line_color="#16a34a", annotation_text="K optimal = 5")
-    fig_elbow.update_layout(template="plotly_white", height=380)
-    st.plotly_chart(fig_elbow, width='stretch')
-    st.caption(f"Silhouette Score untuk K=5: **{sil_score:.4f}**")
+    st.markdown('<div class="section-title">📈 Elbow Method &amp; Silhouette Score per Nilai K</div>', unsafe_allow_html=True)
+    st.write(
+        "Gunakan grafik ini untuk membandingkan kualitas clustering di setiap K. "
+        "**WCSS** (garis biru) menurun seiring bertambahnya K — cari titik 'siku' (elbow). "
+        "**Silhouette Score** (garis hijau) idealnya setinggi mungkin — semakin tinggi, "
+        "cluster semakin terpisah dengan baik. Garis putus-putus menandai K yang sedang dipilih."
+    )
+
+    fig_combo = make_subplots(specs=[[{"secondary_y": True}]])
+    fig_combo.add_trace(
+        go.Scatter(x=k_range, y=wcss, mode="lines+markers", name="WCSS (Elbow)",
+                    line=dict(color="#3b82f6", width=3)),
+        secondary_y=False,
+    )
+    fig_combo.add_trace(
+        go.Scatter(x=k_range, y=sil_scores_range, mode="lines+markers", name="Silhouette Score",
+                    line=dict(color="#16a34a", width=3)),
+        secondary_y=True,
+    )
+    fig_combo.add_vline(x=k_selected, line_dash="dash", line_color="#ef4444",
+                         annotation_text=f"K terpilih = {k_selected}", annotation_position="top")
+    fig_combo.update_xaxes(title_text="Jumlah Cluster (K)", dtick=1)
+    fig_combo.update_yaxes(title_text="WCSS", secondary_y=False)
+    fig_combo.update_yaxes(title_text="Silhouette Score", secondary_y=True)
+    fig_combo.update_layout(template="plotly_white", height=420,
+                             title="Perbandingan WCSS dan Silhouette Score untuk K = 2 s/d 10",
+                             legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0))
+    st.plotly_chart(fig_combo, width='stretch')
+
+    sil_table = pd.DataFrame({"K": k_range, "WCSS": wcss, "Silhouette_Score": sil_scores_range})
+    sil_table["Terpilih"] = sil_table["K"].apply(lambda x: "✅" if x == k_selected else "")
+    st.dataframe(
+        sil_table.style.format({"WCSS": "{:,.1f}", "Silhouette_Score": "{:.4f}"}),
+        width='stretch',
+    )
+    st.caption(f"Silhouette Score untuk K = {k_selected} (dipilih di sidebar): **{sil_score:.4f}**")
 
 # =============================================================================
 # HALAMAN 3: STRATEGI PEMASARAN
 # =============================================================================
 elif page == "🎯 Strategi Pemasaran":
     st.markdown('<div class="section-title">🎯 Strategi Pemasaran per Segmen Pelanggan</div>', unsafe_allow_html=True)
-    st.write("Rekomendasi strategi pemasaran disusun berdasarkan karakteristik RFM tiap cluster hasil segmentasi.")
+    st.write(
+        f"Rekomendasi strategi pemasaran disusun berdasarkan karakteristik RFM tiap cluster "
+        f"hasil segmentasi (K = {k_selected}). Kategori & strategi di bawah dihitung otomatis "
+        "berdasarkan peringkat skor RFM tiap cluster, sehingga tetap relevan untuk berapapun K."
+    )
 
-    cols = st.columns(3)
+    n_cols = 3
+    cols = st.columns(n_cols)
     for i, c in enumerate(sorted(STRATEGI.keys())):
         info = STRATEGI[c]
         row = cluster_summary[cluster_summary["Cluster"] == c].iloc[0]
-        with cols[i % 3]:
+        with cols[i % n_cols]:
             st.markdown(f"""
             <div class="cluster-card" style="--accent:{CLUSTER_COLORS[c]}">
                 <span class="badge">Cluster {c}</span>
@@ -524,22 +623,23 @@ elif page == "🎯 Strategi Pemasaran":
     st.markdown('<div class="section-title">📊 Perbandingan Nilai RFM Antar Segmen</div>', unsafe_allow_html=True)
     comp = cluster_summary.copy()
     comp["Kategori"] = comp["Cluster"].map(lambda c: STRATEGI[c]["Kategori"])
+    color_map_kategori = {STRATEGI[c]["Kategori"]: CLUSTER_COLORS[c] for c in STRATEGI}
     t1, t2, t3 = st.columns(3)
     with t1:
         fig_r = px.bar(comp, x="Kategori", y="Recency", color="Kategori",
-                        color_discrete_map={STRATEGI[c]["Kategori"]: CLUSTER_COLORS[c] for c in STRATEGI},
+                        color_discrete_map=color_map_kategori,
                         title="Rata-rata Recency (hari)")
         fig_r.update_layout(template="plotly_white", height=340, showlegend=False, xaxis_tickangle=-25)
         st.plotly_chart(fig_r, width='stretch')
     with t2:
         fig_f = px.bar(comp, x="Kategori", y="Frequency", color="Kategori",
-                        color_discrete_map={STRATEGI[c]["Kategori"]: CLUSTER_COLORS[c] for c in STRATEGI},
+                        color_discrete_map=color_map_kategori,
                         title="Rata-rata Frequency (kali beli)")
         fig_f.update_layout(template="plotly_white", height=340, showlegend=False, xaxis_tickangle=-25)
         st.plotly_chart(fig_f, width='stretch')
     with t3:
         fig_m = px.bar(comp, x="Kategori", y="Monetary", color="Kategori",
-                        color_discrete_map={STRATEGI[c]["Kategori"]: CLUSTER_COLORS[c] for c in STRATEGI},
+                        color_discrete_map=color_map_kategori,
                         title="Rata-rata Monetary (Rp)")
         fig_m.update_layout(template="plotly_white", height=340, showlegend=False, xaxis_tickangle=-25)
         st.plotly_chart(fig_m, width='stretch')
@@ -549,10 +649,7 @@ elif page == "🎯 Strategi Pemasaran":
     strategi_table.index.name = "Cluster"
     st.dataframe(strategi_table, width='stretch')
 
-    csv_strategi = rfm.merge(
-        pd.DataFrame(STRATEGI).T[["Kategori", "Strategi"]].reset_index().rename(columns={"index": "Cluster"}),
-        on="Kategori", how="left", suffixes=("", "_ref")
-    ) if False else rfm.copy()
+    csv_strategi = rfm.copy()
     csv_strategi["Strategi_Pemasaran"] = csv_strategi["Cluster"].map(lambda c: STRATEGI[c]["Strategi"])
     st.download_button(
         "📥 Download Data Pelanggan + Strategi (CSV)",
