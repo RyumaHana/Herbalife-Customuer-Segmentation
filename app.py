@@ -35,12 +35,10 @@ st.markdown("""
 
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    header {visibility: hidden;}
     
-    [data-testid="collapsedControl"] {
-        visibility: visible !important;
-        display: block !important;
-    }
+    header {background: transparent;}
+    /* header {visibility: hidden;} */
+    
     .main {
         background-color: #f6f8fb;
     }
