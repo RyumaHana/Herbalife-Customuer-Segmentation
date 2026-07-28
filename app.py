@@ -301,7 +301,7 @@ with st.sidebar:
     st.markdown("---")
 
     uploaded = st.file_uploader("📁 Ganti dataset (opsional)", type=["csv"])
-    data_source = uploaded if uploaded is not None else "dataset_herbalife2425_koreksi.csv"
+    data_source = uploaded if uploaded is not None else "dataset_herbalife2425.csv"
 
     st.markdown("### ⚙️ Pengaturan Clustering")
     k_selected = st.slider(
